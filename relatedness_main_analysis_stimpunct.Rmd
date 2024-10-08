@@ -1,0 +1,315 @@
+---
+
+
+title: "SAW-C: Main Relatedness Analysis (with stimulus punctuation)"
+author: "Sean Trott, Pam Riviere"
+output:
+  # pdf_document: 
+  #    fig_caption: yes
+  #    keep_md: yes
+  #    keep_tex: yes
+  html_document:
+     keep_md: yes
+     toc: yes
+     toc_float: yes
+     date: "2024-10-08"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(dpi = 300, fig.format = "pdf", warning = FALSE, message = FALSE)
+```
+
+```{r include=FALSE}
+library(tidyverse)
+library(lmtest)
+library(forcats)
+library(broom)
+library(lme4)
+library(ggridges)
+library(lmerTest)
+library(ggrepel)
+library(tools)
+library(viridis)
+library(corrplot)
+library(gplots)
+
+all_colors <- viridis::viridis(10, option = "mako")
+my_colors <- all_colors[c(3, 5, 7)]  # Selecting specific colors from the palette
+my_colors <- all_colors[c(3, 7)] 
+```
+
+# Load data
+
+```{r}
+### setwd("/Users/seantrott/Dropbox/UCSD/Research/Ambiguity/SSD/spanish_norms/src/analysis/")
+setwd("/Users/pamelariviere/Desktop/projects/project_sawc/spanish_norms/src/analysis/")
+### Read in all data
+df_final = read_csv("../../data/processed/human/sawc_relatedness_full_critical_data.csv")
+nrow(df_final)
+length(unique(df_final$Participant))
+```
+
+# RQ1: Same vs. Different Sense
+
+```{r rq1_same_different}
+df_ratio = df_final %>% 
+  group_by(Same_sense) %>%
+  mutate(count_condition = n()) %>%
+  ungroup() %>%
+  group_by(Same_sense, Response, count_condition) %>%
+  summarise(count_response = n()) %>%
+  mutate(prop_response = count_response / count_condition)
+              
+df_ratio %>%         
+  ggplot(aes(x = Response,
+             y = prop_response)) +
+  geom_bar(alpha = .6, stat = "identity") +
+  theme_minimal() +
+  labs(x = "Relatedness",
+       y = "P(Response | Condition)") +
+  facet_wrap(~Same_sense) +
+  theme(text = element_text(size = 15),
+        legend.position="none")
+
+df_final %>%         
+  ggplot(aes(x = Response)) +
+  geom_bar(alpha = .6, stat = "count") +
+  theme_minimal() +
+  labs(x = "Relatedness",
+       y = "Count") +
+  facet_wrap(~Same_sense) +
+  theme(text = element_text(size = 15),
+        legend.position="none")
+
+df_final %>%
+  group_by(Same_sense) %>%
+  summarise(m_rel = mean(Response),
+            sd_rel = sd(Response))
+
+
+mod_full = lmer(data = df_final,
+                Response ~ Same_sense +
+                  (1 + Same_sense | Participant) + 
+                  (1 + Same_sense | List) + (1 | Word),
+                REML = FALSE)
+
+mod_reduced = lmer(data = df_final,
+                Response ~ # Same_sense +
+                  (1 + Same_sense | Participant) + 
+                  (1 + Same_sense | List) + (1 | Word),
+                REML = FALSE)
+
+summary(mod_full)
+anova(mod_full, mod_reduced)
+```
+
+# RQ2 + RQ5: Correlation with BETO
+
+## Load and process BETO data
+
+```{r}
+### Define function to add a period to stimulus sentences
+# Function to add a period if it's missing - credit: Claude
+add_period <- function(sentence) {
+  if (!grepl("[.!?]$", sentence)) {
+    return(paste0(sentence, "."))
+  }
+  return(sentence)
+}
+
+### BETO distances
+df_beto_distances = read_csv("../../data/processed/models_stimpunct/sawc-distances_model-bert-base-spanish-wwm-cased.csv")
+nrow(df_beto_distances)
+
+### basic items to get Tag
+df_sawc_items = read_csv("../../data/raw/items/sawc_sentence_pairs.csv")
+df_sawc_items$Sentence_1 <- sapply(df_sawc_items$Sentence_1, add_period)
+df_sawc_items$Sentence_2 <- sapply(df_sawc_items$Sentence_2, add_period)
+
+### merge together
+df_merged = df_beto_distances %>%
+  left_join(df_sawc_items)
+nrow(df_merged)
+```
+
+## Merge with SAW-C Norms
+
+```{r}
+df_list_mean = df_final %>%
+  group_by(List, Word, Tag) %>%
+  summarise(mean_relatedness = mean(Response), .groups = "drop",
+            count = n())
+nrow(df_list_mean)
+
+df_merged_beto = df_merged %>%
+  inner_join(df_list_mean)
+nrow(df_merged_beto)
+```
+
+## RQ2: Correlation by layer
+
+```{r rq2_corr_by_layer}
+df_by_layer = df_merged_beto %>%
+  group_by(Layer) %>%
+  summarise(r = cor(mean_relatedness, Distance, method = "pearson"),
+            r2 = r ** 2,
+            rho = cor(mean_relatedness, Distance, method = "spearman"),
+            count = n())
+
+summary(df_by_layer$rho)
+summary(df_by_layer$r2)
+summary(df_by_layer$r)
+
+df_by_layer %>%
+  ggplot(aes(x = Layer,
+             y = r)) +
+  geom_line(size = 2,
+            color = "cornflower blue") +
+  theme_minimal() +
+  labs(x = "Layer (BETO)",
+       y = "Pearson's r") +
+  scale_x_continuous(breaks = c(0:13)) +
+  theme(text = element_text(size = 15),
+        legend.position="none")
+
+
+df_by_layer %>%
+  ggplot(aes(x = Layer,
+             y = rho)) +
+  geom_line(size = 2,
+            color = "cornflower blue") +
+  theme_minimal() +
+  labs(x = "Layer (BETO)",
+       y = "Spearman's rho") +
+  scale_x_continuous(breaks = c(0:13)) +
+  theme(text = element_text(size = 15),
+        legend.position="none")
+
+df_by_layer %>%
+  ggplot(aes(x = Layer,
+             y = r2)) +
+  geom_line(size = 2,
+            color = "cornflower blue") +
+  theme_minimal() +
+  labs(x = "Layer (BETO)",
+       y = "R2") +
+  scale_x_continuous(breaks = c(0:13)) +
+  theme(text = element_text(size = 15),
+        legend.position="none")
+
+min(df_by_layer$rho)
+```
+
+## RQ5: Expected layer
+
+```{r rq5_layer}
+
+df_wide <- df_merged_beto %>%
+  pivot_wider(
+    names_from = Layer,       # This specifies where to get the names of the new columns
+    values_from = Distance    # This specifies what values to fill the new columns with
+  ) %>%
+rename_with(.cols = matches("^[0-9]+$"),  
+              .fn = ~ paste0("Layer", as.integer(.) + 1))  
+
+
+base_formula <- "mean_relatedness ~ "
+
+# Create a vector to hold all layer names that you want to include in the models
+layer_names <- colnames(df_wide)[grepl("Layer", colnames(df_wide))]
+
+# Generate the model formulas incrementally
+formulas <- sapply(seq_along(layer_names), function(i) {
+  paste(base_formula, paste(layer_names[1:i], collapse = " + "))
+})
+
+# Initialize a vector to store R-squared values
+r_squared <- numeric(length(formulas))
+
+# Loop over the formulas
+for (i in seq_along(formulas)) {
+  model <- lm(formulas[i], data = df_wide)
+  r_squared[i] <- summary(model)$r.squared
+}
+
+
+df_results_expected = data.frame(r_squared, layer_names) %>%
+  mutate(r2 = r_squared) %>%
+  mutate(r2_delta = c(NA, diff(r2))) %>%
+  mutate(Layer = as.numeric(gsub("Layer", "", layer_names)) - 1) %>%
+  mutate(weighted_layer = Layer * r2_delta)
+
+expected_layer = sum(df_results_expected$weighted_layer, na.rm = TRUE) / sum(df_results_expected$r2_delta, na.rm = TRUE)
+expected_layer
+
+```
+
+# RQ3: Cosine distance vs. Same/Different
+
+Now, we select the *best-performing layer* from BETO.
+
+```{r rq3}
+df_beto_l5 = df_merged %>%
+  filter(Layer == 7) %>%
+  select(-Same_sense)
+nrow(df_beto_l5)
+
+df_experimental_with_beto = df_final %>%
+  left_join(df_beto_l5)
+nrow(df_experimental_with_beto)
+  
+
+mod_full = lmer(data = df_experimental_with_beto,
+                Response ~ Same_sense + Distance +
+                  (1 + Same_sense + Distance | Participant) + 
+                  (1 | List) + (1 | Word),
+                REML = FALSE)
+
+mod_reduced = lmer(data = df_experimental_with_beto,
+                Response ~ Distance + # Same_sense +
+                  (1 + Same_sense + Distance | Participant) + 
+                  (1 | List) + (1 | Word),
+                REML = FALSE)
+
+mod_just_same = lmer(data = df_experimental_with_beto,
+                Response ~ Same_sense + # Distance
+                  (1 + Same_sense + Distance | Participant) + 
+                  (1 | List) + (1 | Word),
+                REML = FALSE)
+
+summary(mod_full)
+anova(mod_full, mod_reduced)
+anova(mod_full, mod_just_same)
+
+
+
+### Visualize
+df_experimental_with_beto %>%
+  mutate(distance_binned = ntile(Distance, 20)) %>%
+  group_by(Same_sense, distance_binned) %>%
+  summarize(
+    mean_relatedness = mean(Response),
+    sd_relatedness = sd(Response),
+    count = n(),
+    se_relatedness = sd_relatedness / sqrt(count),
+  ) %>%
+  ggplot(aes(x = distance_binned, 
+             y = mean_relatedness, 
+             color = Same_sense, 
+             fill = Same_sense)) +
+  geom_line(size = 1.5) +
+  geom_ribbon(aes(ymin = mean_relatedness - se_relatedness, 
+                  ymax = mean_relatedness + se_relatedness), 
+              alpha = 0.8,
+              color = NA) +
+  labs(x = "BETO Cosine Distance (Binned)",
+       y = "Relatedness",
+       color = "Same Sense",
+       fill = "Same Sense") +
+  theme_minimal() +
+  scale_fill_manual(values = my_colors)  +
+  scale_color_manual(values = my_colors)  +
+  theme(text = element_text(size = 15),
+        legend.position="bottom")
+  
+```
